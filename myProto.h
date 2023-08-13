@@ -4,7 +4,6 @@
 #define MASTER 0
 #define NUM_SATISFY 3
 #define PAR_OUTPUT "output.txt"
-#define SEQ_OUTPUT "output_seq.txt"
 
 /*****************************
  ***** type definitions ******
@@ -36,23 +35,23 @@ void sendParameters(int process, int numProc, int *N, int *K, float *D, int *tCo
 /* receive parameters from master process */
 void receiveParameters(int *N, int *K, float *D, int *tCount);
 
+/* send results to MASTER */
+void sendIndices(int *local_indices, float *t);
+
+/* receive results from slave processes */
+void receiveIndices(int *local_indices, float *t);
+
 /* calculate t range values */
 void calcTRange(int rank, int tCount, int size, int *chunkSize, int *remainder, int *start, int *end);
 
 /* evaluate local t values */
-void evaluateTValues(Point *points_array, int *local_indices, int *local_satisfied, float *local_t, int start, int end, int N, int K, float D, int tCount);
+void evaluateTValues(FILE *file, Point *points_array, int rank, int start, int end, int N, int K, float D, int tCount);
+
+/* master receives and writes to output file all slaves results */
+void handleSlaveResults(FILE *file);
 
 /* write results to output file */
-void writeToFile(int *global_indices_array, float *global_t, int *global_satisfied, int tCount);
-
-/* CPU function to calculate distance between every coordinate */
-float calculateDistanceSeq(Point p1, Point p2, float t);
-
-/* CPU function to check proximity criteria for each point */
-void checkProximitySeq(Point *points, int N, int K, float D, int tCount);
-
-/* comapre sequential and parallel results */
-int test_file_results(const char *file1, const char *file2);
+void writeToFile(FILE *file, int *local_indices, float t);
 
 
 /**************************************

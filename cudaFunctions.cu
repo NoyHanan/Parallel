@@ -7,7 +7,8 @@
 #include <stdarg.h>
 #include "myProto.h"
 
-#define NUM_THREADS 256
+#define BLOCK_SIZE 256
+#define CHECK_ERR(err) { if (err != cudaSuccess) { fprintf(stderr, "GPU error: %s\n", cudaGetErrorString(err)); exit(EXIT_FAILURE); } }
 
 /* calculate x */
 __device__ float calculate_x_device(Point p, double t) {
@@ -44,9 +45,11 @@ __global__ void checkProximityCriteria(Point *points, int *results, int *globalC
 	    
 		for (int j = 0; j < numPoints && *globalCounter < NUM_SATISFY && count < K; j++) {
 			Point p2 = points[j];
-        	float distance = calculateDistanceDevice(p1, p2, t);
-        	if (i != j && distance < D) {
-	            count++;
+			if (i != j) {
+		    	float distance = calculateDistanceDevice(p1, p2, t);
+		    	if (distance < D) {
+			        count++;
+			    }
 	        }
 	    }
 	    
@@ -86,94 +89,62 @@ int computeOnGPU(int *local_indices, Point *h_points, int N, int K, float D, flo
     cudaError_t err;
     
     /* Calculate required blocks */
-    int numBlocks = (N + NUM_THREADS - 1) / NUM_THREADS;
+    int numBlocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-	/* Allocate memory for points on the device */
+    /* Allocate memory for points on the device */
     err = cudaMalloc((void**)&d_points, N * sizeof(Point));
-    if (err != cudaSuccess) {
-        printf("GPU - Failed to allocate device memory for points: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
-    
+    CHECK_ERR(err);
+
     /* Copy points from host to device */
     err = cudaMemcpy(d_points, h_points, N * sizeof(Point), cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        printf("GPU - Failed to copy points from host to device: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
+    CHECK_ERR(err);
     
     /* Allocate memory for results on the device */
     err = cudaMalloc((void**)&d_results, N * sizeof(int));
-    if (err != cudaSuccess) {
-        printf("GPU - Failed to allocate device memory for results: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
+    CHECK_ERR(err);
     
     /* Allocate memory for the global counter on the device */
-	err = cudaMalloc((void**)&d_global_counter, sizeof(int));
-	if (err != cudaSuccess) {
-		printf("GPU - Failed to allocate device memory for counter: %s\n", cudaGetErrorString(err));
-		exit(EXIT_FAILURE); 
-	}
+    err = cudaMalloc((void**)&d_global_counter, sizeof(int));
+    CHECK_ERR(err);
 
-	/* Set the counter in the device memory to 0 */
-	err = cudaMemset(d_global_counter, 0, sizeof(int));;
-	if (err != cudaSuccess) {
-		printf("GPU - Failed to initialize device memory for counter: %s\n", cudaGetErrorString(err));
-		exit(EXIT_FAILURE);
-	}
+    /* Set the counter in the device memory to 0 */
+    err = cudaMemset(d_global_counter, 0, sizeof(int));
+    CHECK_ERR(err);
 
     /* Run the checkProximityCriteria kernel */
-    checkProximityCriteria<<<numBlocks, NUM_THREADS>>>(d_points, d_results, d_global_counter, N, K, D, t);
+    checkProximityCriteria<<<numBlocks, BLOCK_SIZE>>>(d_points, d_results, d_global_counter, N, K, D, t);
     cudaDeviceSynchronize();
     err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error running checkProximityCriteria: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);;
-    }
+    CHECK_ERR(err);
 
     /* Copy counter from device to host */
     int counter;
     err = cudaMemcpy(&counter, d_global_counter, sizeof(int), cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        printf("GPU - Failed to copy counter from device to host: %s\n", cudaGetErrorString(err));
-		exit(EXIT_FAILURE);
-    }
-    
+    CHECK_ERR(err);
+
     /* free d_global_counter */
     err = cudaFree(d_global_counter);
-    if (err != cudaSuccess) {
-        printf("Error freeing d_global_counter: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
-	
-	/* Allocate memory for results on host */
-	h_results = (int *)malloc(N * sizeof(int));
-	if (h_results == NULL) {
-		printf("GPU - Failed to copy results from device to host: %s\n", cudaGetErrorString(err));
-		exit(EXIT_FAILURE);
-	}
+    CHECK_ERR(err);
+
+    /* Allocate memory for results on host */
+    h_results = (int *)Malloc(sizeof(int), N);
 
     /* Copy results from device to host */
     err = cudaMemcpy(h_results, d_results, N * sizeof(int), cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        printf("GPU - Failed to copy results from device to host: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
+    CHECK_ERR(err);
     
     /* free d_results */
     err = cudaFree(d_results);
-    if (err != cudaSuccess) {
-        printf("Error freeing d_results: %s\n", cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
-    
+    CHECK_ERR(err);
+
     /* find NUM_SATISFY points that satisfy the criteria and insert them to local indices array */
-    if (counter == NUM_SATISFY)
-    	fillIndicesArray(h_results, local_indices, N);
+    if (counter >= NUM_SATISFY)
+        fillIndicesArray(h_results, local_indices, N);
 
     /* Free device memory */
-	free(h_results);
+    free(h_results);
+    err = cudaFree(d_points);
+    CHECK_ERR(err);
     
     return counter < NUM_SATISFY ? 1 : 0;
 }

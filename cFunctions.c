@@ -121,6 +121,42 @@ void receiveParameters(int *N, int *K, float *D, int *tCount)
 }
 
 
+/* send results to MASTER */
+void sendIndices(int *local_indices, float *t)
+{
+	int i, position = 0;
+	int bufSize = NUM_SATISFY * sizeof(int) + 1 * sizeof(float);
+	char *buf = (char *)malloc(bufSize);
+	
+	/* pack variables */
+	MPI_Pack(local_indices, NUM_SATISFY, MPI_INT, buf, bufSize, &position, MPI_COMM_WORLD);
+    MPI_Pack(t, 1, MPI_FLOAT, buf, bufSize, &position, MPI_COMM_WORLD);
+    
+   	MPI_Send(buf, position, MPI_PACKED, MASTER, 0, MPI_COMM_WORLD);
+    		
+    free(buf);
+}
+
+
+/* receive results from slave processes */
+void receiveIndices(int *local_indices, float *t)
+{
+	int position = 0;
+	int bufSize = NUM_SATISFY * sizeof(int) + 1 * sizeof(float);
+	char *buf = (char *)malloc(bufSize);
+	MPI_Status status;
+	
+	/* Recieve the packed message */
+	MPI_Recv(buf, bufSize, MPI_PACKED, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+	
+	/* unpack */
+    MPI_Unpack(buf, bufSize, &position, local_indices, NUM_SATISFY, MPI_INT, MPI_COMM_WORLD);
+    MPI_Unpack(buf, bufSize, &position, t, 1, MPI_FLOAT, MPI_COMM_WORLD);
+    
+    free(buf);
+}
+
+
 /* calculate t range values */
 void calcTRange(int rank, int tCount, int size, int *chunkSize, int *remainder, int *start, int *end)
 {
@@ -132,56 +168,75 @@ void calcTRange(int rank, int tCount, int size, int *chunkSize, int *remainder, 
 
 
 /* evaluate local t values */
-void evaluateTValues(Point *points_array, int *local_indices, int *local_satisfied, float *local_t, int start, int end, int N, int K, float D, int tCount) {
-	int i, index = 0;
+void evaluateTValues(FILE *file, Point *points_array, int rank, int start, int end, int N, int K, float D, int tCount) {
+	int i, index = 0, satisfy = -1;
 	
-	//#pragma omp parallel for
+	#pragma omp parallel for
     for (i = start; i < end; i++) {
+    	/* calculate t */
     	float t = (float)(2 * i) / tCount - 1;
-    	int res = computeOnGPU(&local_indices[index * NUM_SATISFY], points_array, N, K, D, t);
+    	
+    	/* Allocate memory for local indices array */
+		int *local_indices = (int *)Malloc(sizeof(int), NUM_SATISFY);
 		
-    	if (res == 0) {
-			local_satisfied[index] = 1;
-		} else if (res == 1){
-			local_satisfied[index] = 0;
-		} else {
-			printf("Failed to computeOnGPU.\n");
-			MPI_Abort(MPI_COMM_WORLD, __LINE__);
-		}
-		local_t[index] = t;
+		/* check proximity criteria */
+    	int res = computeOnGPU(local_indices, points_array, N, K, D, t);
 		
-		index++;
+		if (res == 0) {
+			if (rank == MASTER)
+				/* write local results to file */
+				#pragma omp critical
+				writeToFile(file, local_indices, t);
+			else 
+				/* send results to MASTER */
+				sendIndices(local_indices, &t);
+			
+			satisfy = 0;
+    	}
+    		
+    	free(local_indices);
     }
+    
+    if (satisfy == -1)
+    	fprintf(file, "There were no %d points found for any t.", NUM_SATISFY);
 }
 
 
-/* write results to output file */
-void writeToFile(int *global_indices_array, float *global_t, int *global_satisfied, int tCount)
+/* master receives and writes to output file all slaves results */
+void handleSlaveResults(FILE *file)
 {
-    FILE *file = fopen(PAR_OUTPUT, "w");
-    if (file == NULL) {
-        printf("Error writing results to file.\n");
-    	MPI_Abort(MPI_COMM_WORLD, __LINE__);
+	int flag;
+	MPI_Status status;
+	
+	do {
+		MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &status);
+		if (flag) {
+			float t;
+			int *local_indices = (int *)Malloc(sizeof(int), NUM_SATISFY);
+			
+			/* receive results from slave processes */
+			receiveIndices(local_indices, &t);
+			
+			/* write to file */
+			writeToFile(file, local_indices, t);
+			
+			free(local_indices);
+		}
+	} while(flag);
+}
+
+
+/* write local results to output file */
+void writeToFile(FILE *file, int *local_indices, float t)
+{   
+    int j;
+    
+    fprintf(file, "Points ");
+    for (j = 0; j < NUM_SATISFY - 1; j++) {
+        fprintf(file, "pointID%d, ", local_indices[j]);
     }
-    
-    int i, j, flag = -1;
-    for (i = 0; i < tCount; i++) {
-        if (global_satisfied[i] == 1) {
-        
-            fprintf(file, "Points ");
-            for (j = 0; j < NUM_SATISFY - 1; j++) {
-                fprintf(file, "pointID%d, ", global_indices_array[i * NUM_SATISFY + j]);
-            }
-            fprintf(file, "pointID%d ", global_indices_array[i * NUM_SATISFY + j]);
-            fprintf(file, "satisfy Proximity Criteria at t = %f\n", global_t[i]);
-            flag = 0;
-        }
-    }
-    
-    if (flag == -1)
-    	fprintf(file, "There were no 3 points found for any t.");
-    
-    fclose(file);
+    fprintf(file, "pointID%d ", local_indices[j]);
+    fprintf(file, "satisfy Proximity Criteria at t = %f\n", t);
 }
 
 
