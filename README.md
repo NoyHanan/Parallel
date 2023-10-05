@@ -2,7 +2,7 @@
 
 ## Description
 
-This project is a Proximity Criteria Checker for a set of points placed in a two-dimensional plane. The coordinates (x, y) of each point P are defined by given formulas. The project checks if there exist at least 3 points that satisfy the Proximity Criteria for a range of t values. The project is implemented using C, CUDA, MPI, and OpenMP.
+This project is a Proximity Criteria Checker for a set of points placed in a two-dimensional plane. The coordinates (x, y) of each point P are defined by given formulas. The project checks if there exist at least 3 points that satisfy a Proximity Criteria for a range of t values. The project is implemented using C, CUDA, MPI, and OpenMP.
 
 ## Installation
 
